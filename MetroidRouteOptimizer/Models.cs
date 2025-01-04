@@ -5,26 +5,27 @@
     /// </summary>
     public enum Powerup
     {
-        MorphBall,
         Bombs,
         ChargeBeam,
-        IceBeam,
-        Spazer,
-        WaveBeam,
-        PlasmaBeam,
-        VariaSuit,
+        EnergyTank,
         GravitySuit,
-        XRayScope,
         GrappleBeam,
-        SpeedBooster,
         HighJumpBoots,
-        SpringBall,
-        SpaceJump,
-        ScrewAttack,
-        ReserveTank,
+        IceBeam,
         Missiles,
+        MorphBall,
+        PlasmaBeam,
+        PowerBomb,
+        ReserveTank,
+        ScrewAttack,
+        SpaceJump,
+        Spazer,
+        SpeedBooster,
+        SpringBall,
         SuperMissiles,
-        PowerBomb
+        VariaSuit,
+        WaveBeam,
+        XRayScope
     }
 
     /// <summary>
@@ -53,7 +54,7 @@
 
     public class Exit
     {
-        public Screen Destination { get; } = new();
+        public int DestinationScreenId { get; } = new();
         public Requirement Requirement { get; } = new();
     }
 
