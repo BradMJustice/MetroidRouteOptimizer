@@ -1,10 +1,161 @@
 {
-  "screens" [
+  "itemTypes": [
+    "Missile",
+    "Bomb",
+    "EnergyTank"
+  ],
+  "items": [
+    {
+      "id": 0,
+      "type": 1,
+      "requirements": [ [ 1 ] ]
+    },
     {
       "id": 1,
+      "type": 2,
+      "requirements": [ [] ]
+    },
+    {
+      "id": 2,
+      "type": 1,
+      "requirements": [ [ 0 ] ]
+    },
+    {
+      "id": 3,
+      "type": 0,
+      "requirements": [ [ 0 ] ]
+    },
+    {
+      "id": 4,
+      "type": 1,
+      "requirements": [ [] ]
+    },
+    {
+      "id": 5,
+      "type": 0,
+      "requirements": [ [] ]
+    }
+  ],
+  "screens": [
+    {
+      "id": 0,
+      "items": [ 0 ],
       "exits": [
-
+        {
+          "destinationScreenId": 1,
+          "requirements": [ [ 1 ] ]
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "items": [ 1 ],
+      "exits": [
+        {
+          "destinationScreenId": 0,
+          "requirements": [ [ 1 ] ]
+        },
+        {
+          "destinationScreenId": 2,
+          "requirements": [ [ 0 ] ]
+        },
+        {
+          "destinationScreenId": 4,
+          "requirements": [ [] ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "items": [ 2 ],
+      "exits": [
+        {
+          "destinationScreenId": 1,
+          "requirements": [ [ 0 ] ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "items": [],
+      "exits": [
+        {
+          "destinationScreenId": 4,
+          "requirements": [ [ 0 ] ]
+        },
+        {
+          "destinationScreenId": 6,
+          "requirements": [ [] ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "items": [],
+      "exits": [
+        {
+          "destinationScreenId": 3,
+          "requirements": [ [ 0 ] ]
+        },
+        {
+          "destinationScreenId": 1,
+          "requirements": [ [] ]
+        },
+        {
+          "destinationScreenId": 5,
+          "requirements": [ [] ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "items": [ 3 ],
+      "exits": [
+        {
+          "destinationScreenId": 4,
+          "requirements": [ [] ]
+        },
+        {
+          "destinationScreenId": 8,
+          "requirements": [ [] ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "items": [],
+      "exits": [
+        {
+          "destinationScreenId": 3,
+          "requirements": [ [] ]
+        },
+        {
+          "destinationScreenId": 7,
+          "requirements": [ [ 0 ] ]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "items": [ 4 ],
+      "exits": [
+        {
+          "destinationScreenId": 6,
+          "requirements": [ [ 0 ] ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "items": [ 5 ],
+      "exits": [
+        {
+          "destinationScreenId": 5,
+          "requirements": [ [] ]
+        }
       ]
     }
-  ]
+  ],
+  "startingScreen": 4,
+  "exitScreen": 3
 }
