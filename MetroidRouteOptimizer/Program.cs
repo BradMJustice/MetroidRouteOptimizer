@@ -49,30 +49,30 @@ namespace MetroidRouteOptimizer
                 return;
             }
 
-            // Find the optimal route
-            var (fullRoute, bestPartial) = FindOptimalRoute(gameState, rawGameState.ExitScreen);
+            // Single-pass Dijkstra
+            var (fullRoute, totalCost, bestPartialRoute, bestPartialItems) =
+                FindRouteCollectAllAndReachExit(gameState);
 
-            // Output the result
-            Console.WriteLine("\nOptimal Route:");
             if (fullRoute.Count == 0)
             {
-                Console.WriteLine("(No valid full route found.)");
+                // No full route found
+                Console.WriteLine("\nNo valid route found that collects all items and reaches the exit.");
 
-                if (bestPartial.Count > 0)
+                if (bestPartialRoute.Count > 0)
                 {
-                    Console.WriteLine("\nBest Partial Route (collected the most items):");
-                    foreach (var step in bestPartial)
+                    Console.WriteLine($"\nBest Partial Route (collected {bestPartialItems} of {gameState.Items.Count} items):");
+                    foreach (var step in bestPartialRoute)
                     {
                         Console.WriteLine(step);
                     }
                 }
-                else
-                {
-                    Console.WriteLine("(No meaningful partial route either.)");
-                }
+
+                // Optional diagnostics
+                DiagnoseNoRoute(gameState, bestPartialItems);
             }
             else
             {
+                Console.WriteLine($"\nFound a valid route! Total cost = {totalCost}.\n");
                 foreach (var step in fullRoute)
                 {
                     Console.WriteLine(step);
@@ -81,27 +81,34 @@ namespace MetroidRouteOptimizer
         }
 
         /// <summary>
-        /// Finds the route that collects all items and ends on exitScreen.
-        /// If no full route is found, returns the best partial route as well.
+        /// Runs a single-pass Dijkstra on (screenId + collectedItemIds).
+        /// Costs:
+        ///  - +1 per exit traversal
+        ///  - +1 per item pickup
+        /// Returns:
+        ///  - A full route if we manage to collect all items and reach the exit
+        ///  - Otherwise, the best partial route (most items, tie broken by lowest cost)
         /// </summary>
-        static (List<string> fullRoute, List<string> bestPartial) FindOptimalRoute(GameState gameState, int exitScreen)
+        static
+        (
+            List<string> fullRoute,
+            int totalCost,
+            List<string> bestPartialRoute,
+            int bestPartialItems
+        )
+        FindRouteCollectAllAndReachExit(GameState gameState)
         {
-            var fullRouteSteps = new List<string>();
-            var priorityQueue = new PriorityQueue<State, int>();
+            var pq = new PriorityQueue<State, int>();
 
-            // Visited states: (screenId, sortedCollectedItemIds)
-            var visitedStates = new HashSet<(int, string)>();
+            // (screenId, sortedCollectedItems) -> best known cost
+            var visitedStates = new Dictionary<(int, string), int>();
 
-            // For diagnostics
-            var itemsEverCollected = new HashSet<int>();
-            var screensEverVisited = new HashSet<int>();
-
-            // Track best partial route
+            // Track best partial
             State bestPartialState = null;
             int maxItemsCollected = 0;
             int bestPartialWeight = int.MaxValue;
 
-            // Initialize starting state
+            // Create the start state
             var startState = new State
             {
                 CurrentScreenId = gameState.StartingScreen,
@@ -111,215 +118,186 @@ namespace MetroidRouteOptimizer
                 Steps = new List<string>()
             };
 
-            // Collect items in the starting room
-            var collectedNow = CollectItemsInRoom(startState, gameState, itemsEverCollected);
+            // Collect any items in the starting screen
+            TryCollectAllItemsInScreen(startState, gameState);
             UpdateBestPartialIfNeeded(startState, ref bestPartialState, ref maxItemsCollected, ref bestPartialWeight);
-            priorityQueue.Enqueue(startState, 0);
 
-            while (priorityQueue.Count > 0)
+            pq.Enqueue(startState, startState.Weight);
+
+            while (pq.Count > 0)
             {
-                var state = priorityQueue.Dequeue();
+                var current = pq.Dequeue();
 
-                // Mark that we visited this screen (for diagnostics)
-                screensEverVisited.Add(state.CurrentScreenId);
-
-                // Create the visited key
-                var sortedIds = string.Join(",", state.CollectedItemIds.OrderBy(x => x));
-                var stateKey = (state.CurrentScreenId, sortedIds);
-
-                // *** Do NOT mark visited until after we try re-collecting items on THIS state. ***
-                // This ensures we don't skip re-checking the same screen with newly collected items.
-
-                // Possibly collect more items in the same screen
-                // but do so on a *new* cloned state so we can re-enqueue if we get new items.
-                var sameScreenState = CloneState(state);
-                var reCollected = CollectItemsInRoom(sameScreenState, gameState, itemsEverCollected);
-
-                if (reCollected)
+                // Check for victory
+                if (current.CollectedItemIds.Count == gameState.Items.Count &&
+                    current.CurrentScreenId == gameState.ExitScreen)
                 {
-                    // We found new items in the same room
-                    UpdateBestPartialIfNeeded(sameScreenState, ref bestPartialState, ref maxItemsCollected, ref bestPartialWeight);
-
-                    var sameScreenSortedIds = string.Join(",", sameScreenState.CollectedItemIds.OrderBy(x => x));
-                    var sameScreenKey = (sameScreenState.CurrentScreenId, sameScreenSortedIds);
-                    if (!visitedStates.Contains(sameScreenKey))
-                    {
-                        priorityQueue.Enqueue(sameScreenState, sameScreenState.Weight);
-                    }
+                    // Found a route with all items
+                    return (current.Steps, current.Weight, new List<string>(), gameState.Items.Count);
                 }
 
-                // Now we consider moving from the *original* state to other screens
-                // (Alternatively, we could move from sameScreenState, but let's keep consistent.)
-                var currentScreen = gameState.Screens[state.CurrentScreenId];
-                foreach (var exit in currentScreen.Exits)
+                // Build visited key
+                var sortedItems = string.Join(",", current.CollectedItemIds.OrderBy(x => x));
+                var key = (current.CurrentScreenId, sortedItems);
+
+                // Skip if we've seen it cheaper
+                if (visitedStates.TryGetValue(key, out var oldCost))
                 {
-                    if (gameState.AreRequirementsMet(exit.Requirements, state.CollectedTypeCounts))
+                    if (current.Weight >= oldCost)
                     {
-                        var usedItems = GetSatisfiedRequirements(exit.Requirements, state.CollectedTypeCounts, gameState);
+                        continue;
+                    }
+                }
+                visitedStates[key] = current.Weight;
 
-                        // Build a move message
-                        var moveMessage = $"Move from screen {state.CurrentScreenId} to screen {exit.DestinationScreenId}";
-                        if (exit.Requirements.Count > 0 && usedItems != "(none)")
-                        {
-                            moveMessage += $" using {usedItems}";
-                        }
+                // Update best partial
+                UpdateBestPartialIfNeeded(current, ref bestPartialState, ref maxItemsCollected, ref bestPartialWeight);
 
-                        var newState = CloneState(state);
+                // Try each exit from the current screen
+                var screen = gameState.Screens[current.CurrentScreenId];
+                foreach (var exit in screen.Exits)
+                {
+                    // If we meet item requirements for the exit
+                    if (gameState.AreRequirementsMet(exit.Requirements, current.CollectedTypeCounts))
+                    {
+                        var newState = CloneState(current);
                         newState.CurrentScreenId = exit.DestinationScreenId;
-                        newState.Weight = state.Weight + exit.Weight;
-                        newState.Steps.Add(moveMessage);
+                        newState.Weight += 1; // cost to traverse exit
 
-                        var nextCollected = CollectItemsInRoom(newState, gameState, itemsEverCollected);
-                        UpdateBestPartialIfNeeded(newState, ref bestPartialState, ref maxItemsCollected, ref bestPartialWeight);
-
-                        var newSortedIds = string.Join(",", newState.CollectedItemIds.OrderBy(x => x));
-                        var newStateKey = (newState.CurrentScreenId, newSortedIds);
-
-                        if (!visitedStates.Contains(newStateKey))
+                        // Log
+                        var reqDesc = GetSatisfiedRequirements(exit.Requirements, current.CollectedTypeCounts, gameState);
+                        if (reqDesc == "(none)")
                         {
-                            priorityQueue.Enqueue(newState, newState.Weight);
+                            newState.Steps.Add($"Move from screen {current.CurrentScreenId} to screen {exit.DestinationScreenId} (cost +1)");
+                        }
+                        else
+                        {
+                            newState.Steps.Add($"Move from screen {current.CurrentScreenId} to screen {exit.DestinationScreenId} using {reqDesc} (cost +1)");
+                        }
+
+                        // Attempt to collect items in the new screen
+                        TryCollectAllItemsInScreen(newState, gameState);
+
+                        // Enqueue
+                        pq.Enqueue(newState, newState.Weight);
+                    }
+                }
+            }
+
+            // No route found that collects all items & reaches exit.
+            var partialSteps = bestPartialState?.Steps ?? new List<string>();
+            var partialItemCount = bestPartialState?.CollectedItemIds.Count ?? 0;
+            return (new List<string>(), 0, partialSteps, partialItemCount);
+        }
+
+        /// <summary>
+        /// In the given state's current screen, repeatedly pick up items that we haven't
+        /// collected yet, if we meet their requirements. Each pickup costs +1.
+        /// 
+        /// IMPORTANT: We do NOT remove items from the global screen.Items.
+        /// We rely on 'state.CollectedItemIds' to see if we've already picked an item up.
+        /// </summary>
+        static bool TryCollectAllItemsInScreen(State state, GameState gameState)
+        {
+            bool collectedAnything = false;
+            var screen = gameState.Screens[state.CurrentScreenId];
+
+            bool itemCollected;
+            do
+            {
+                itemCollected = false;
+                // We iterate over all items in this screen, but do NOT remove them from 'screen.Items'
+                foreach (var itemId in screen.Items)
+                {
+                    // If we haven't already collected this item
+                    if (!state.CollectedItemIds.Contains(itemId))
+                    {
+                        var item = gameState.Items[itemId];
+                        // Check if we can pick it up
+                        if (gameState.AreRequirementsMet(item.Requirements, state.CollectedTypeCounts))
+                        {
+                            // +1 cost
+                            state.Weight += 1;
+
+                            // Mark as collected
+                            state.CollectedItemIds.Add(itemId);
+                            if (!state.CollectedTypeCounts.ContainsKey(item.Type))
+                            {
+                                state.CollectedTypeCounts[item.Type] = 0;
+                            }
+                            state.CollectedTypeCounts[item.Type]++;
+
+                            // Log
+                            var itemName = gameState.ItemTypes[item.Type].Name;
+                            var reqDesc = GetSatisfiedRequirements(item.Requirements, state.CollectedTypeCounts, gameState);
+                            if (reqDesc == "(none)")
+                            {
+                                state.Steps.Add($"Collect item {itemId} ({itemName}) on screen {state.CurrentScreenId} (cost +1)");
+                            }
+                            else
+                            {
+                                state.Steps.Add($"Collect item {itemId} ({itemName}) on screen {state.CurrentScreenId} using {reqDesc} (cost +1)");
+                            }
+
+                            collectedAnything = true;
+                            itemCollected = true;
+                            // Break to re-check the same screen in case we unlocked new items
+                            break;
                         }
                     }
                 }
-
-                // *** Now that we've tried re-collecting items AND tried exits, we can mark visited ***
-                if (!visitedStates.Contains(stateKey))
-                {
-                    visitedStates.Add(stateKey);
-                }
-
-                // Check if it was a full route
-                if (state.CollectedItemIds.Count == gameState.Items.Count &&
-                    state.CurrentScreenId == exitScreen)
-                {
-                    fullRouteSteps = state.Steps;
-                    return (fullRouteSteps, new List<string>());
-                }
             }
+            while (itemCollected);
 
-            // No full route found, diagnose
-            DiagnoseNoRoute(gameState, exitScreen, itemsEverCollected, screensEverVisited);
-
-            var bestPartialSteps = bestPartialState?.Steps ?? new List<string>();
-            return (new List<string>(), bestPartialSteps);
+            return collectedAnything;
         }
 
         /// <summary>
-        /// Attempts to collect items in the current room if requirements are met.
-        /// Returns true if new items were collected.
-        /// </summary>
-        static bool CollectItemsInRoom(State state, GameState gameState, HashSet<int> itemsEverCollected)
-        {
-            var currentScreen = gameState.Screens[state.CurrentScreenId];
-            var collectedNow = false;
-
-            foreach (var itemId in currentScreen.Items.ToList())
-            {
-                var item = gameState.Items[itemId];
-                if (gameState.AreRequirementsMet(item.Requirements, state.CollectedTypeCounts))
-                {
-                    state.CollectedItemIds.Add(itemId);
-                    itemsEverCollected.Add(itemId);
-
-                    if (!state.CollectedTypeCounts.ContainsKey(item.Type))
-                        state.CollectedTypeCounts[item.Type] = 0;
-                    state.CollectedTypeCounts[item.Type]++;
-
-                    currentScreen.Items.Remove(itemId);
-
-                    var itemTypeName = gameState.ItemTypes[item.Type].Name;
-                    state.Steps.Add($"Collect {itemTypeName} [ID={itemId}] on screen {state.CurrentScreenId}");
-
-                    collectedNow = true;
-                }
-            }
-            return collectedNow;
-        }
-
-        /// <summary>
-        /// Diagnoses why no route was found, logging which items/screens weren't reached
-        /// </summary>
-        static void DiagnoseNoRoute
-        (
-            GameState gameState,
-            int exitScreen,
-            HashSet<int> itemsEverCollected,
-            HashSet<int> screensEverVisited
-        )
-        {
-            Console.WriteLine("\n--- No route found. Diagnostics:");
-
-            // 1. Which items were never collected
-            var allItemIds = gameState.Items.Keys;
-            var neverCollected = allItemIds.Where(id => !itemsEverCollected.Contains(id)).ToList();
-            if (neverCollected.Count > 0)
-            {
-                Console.WriteLine("  The following items were never collectible:");
-                foreach (var itemId in neverCollected)
-                {
-                    var item = gameState.Items[itemId];
-                    Console.WriteLine($"    - Item ID={itemId} (Type={item.Type} - {gameState.ItemTypes[item.Type].Name})");
-                }
-            }
-            else
-            {
-                Console.WriteLine("  All items were collected at least once by some partial route, but no route satisfied all conditions.");
-            }
-
-            // 2. Check if exit screen was visited
-            if (!screensEverVisited.Contains(exitScreen))
-            {
-                Console.WriteLine($"  The exit screen ({exitScreen}) was never visited in any route.");
-            }
-            else
-            {
-                Console.WriteLine($"  The exit screen ({exitScreen}) was visited, but never with all items collected.");
-            }
-        }
-
-        /// <summary>
-        /// If this state is better than the current best partial (more items or less weight), update it.
+        /// If 'current' is a better partial (i.e. more items, or same items but less weight),
+        /// update bestPartialState.
         /// </summary>
         static void UpdateBestPartialIfNeeded
         (
-            State currentState,
+            State current,
             ref State bestPartialState,
             ref int maxItemsCollected,
             ref int bestPartialWeight
         )
         {
-            int itemCount = currentState.CollectedItemIds.Count;
+            var itemCount = current.CollectedItemIds.Count;
             if (itemCount > maxItemsCollected)
             {
-                bestPartialState = CloneState(currentState);
+                bestPartialState = CloneState(current);
                 maxItemsCollected = itemCount;
-                bestPartialWeight = currentState.Weight;
+                bestPartialWeight = current.Weight;
             }
-            else if (itemCount == maxItemsCollected && currentState.Weight < bestPartialWeight)
+            else if (itemCount == maxItemsCollected && current.Weight < bestPartialWeight)
             {
-                bestPartialState = CloneState(currentState);
-                bestPartialWeight = currentState.Weight;
+                bestPartialState = CloneState(current);
+                bestPartialWeight = current.Weight;
             }
         }
 
         /// <summary>
-        /// Clones the state, so we don't keep referencing the same objects.
+        /// If no full route was found, log some basic diagnostics.
         /// </summary>
-        static State CloneState(State state)
+        static void DiagnoseNoRoute(GameState gameState, int bestPartialItemsCollected)
         {
-            return new State
+            if (bestPartialItemsCollected == gameState.Items.Count)
             {
-                CurrentScreenId = state.CurrentScreenId,
-                CollectedItemIds = new HashSet<int>(state.CollectedItemIds),
-                CollectedTypeCounts = new Dictionary<int, int>(state.CollectedTypeCounts),
-                Weight = state.Weight,
-                Steps = new List<string>(state.Steps)
-            };
+                // So we have all items, but never reached the exit
+                Console.WriteLine("\nDiagnostic: Collected all items, but couldn't reach the exit.");
+            }
+            else
+            {
+                var uncollected = gameState.Items.Count - bestPartialItemsCollected;
+                Console.WriteLine($"\nDiagnostic: {uncollected} item(s) remain uncollected. Possibly unreachable due to item requirements.");
+            }
         }
 
         /// <summary>
-        /// Identifies which AND-group in the requirement is satisfied and returns a string 
-        /// like "Missile AND Bomb". If none is needed, returns "(none)".
+        /// Builds a string describing which AND-group of the requirement is satisfied,
+        /// e.g. "Missile AND Bomb", or "(none)" if no requirement.
         /// </summary>
         static string GetSatisfiedRequirements
         (
@@ -328,17 +306,14 @@ namespace MetroidRouteOptimizer
             GameState gameState
         )
         {
-            if (requirementGroups.Count == 0)
-            {
-                return "(none)";
-            }
+            if (requirementGroups.Count == 0) return "(none)";
 
             foreach (var andGroup in requirementGroups)
             {
                 bool groupSatisfied = true;
                 foreach (var requiredType in andGroup)
                 {
-                    if (!typeCounts.TryGetValue(requiredType, out var cnt) || cnt < 1)
+                    if (!typeCounts.TryGetValue(requiredType, out var c) || c < 1)
                     {
                         groupSatisfied = false;
                         break;
@@ -346,18 +321,27 @@ namespace MetroidRouteOptimizer
                 }
                 if (groupSatisfied)
                 {
-                    var typeNames = andGroup
-                        .Select(t => gameState.ItemTypes[t].Name)
-                        .ToArray();
-
-                    if (typeNames.Length == 0)
-                    {
-                        return "(none)";
-                    }
-                    return string.Join(" AND ", typeNames);
+                    var names = andGroup.Select(t => gameState.ItemTypes[t].Name).ToArray();
+                    if (names.Length == 0) return "(none)";
+                    return string.Join(" AND ", names);
                 }
             }
             return "(unspecified)";
+        }
+
+        /// <summary>
+        /// Clones the given state so we can modify it without affecting the original.
+        /// </summary>
+        static State CloneState(State original)
+        {
+            return new State
+            {
+                CurrentScreenId = original.CurrentScreenId,
+                CollectedItemIds = new HashSet<int>(original.CollectedItemIds),
+                CollectedTypeCounts = new Dictionary<int, int>(original.CollectedTypeCounts),
+                Weight = original.Weight,
+                Steps = new List<string>(original.Steps)
+            };
         }
     }
 }
